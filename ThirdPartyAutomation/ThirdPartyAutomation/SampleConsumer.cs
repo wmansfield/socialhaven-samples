@@ -4,7 +4,11 @@ using Haven.SDK.Models.Requests;
 using Haven.SDK.Models.Responses;
 using System;
 using System.Collections.Generic;
+using System.Drawing;
+using System.Globalization;
+using System.IO;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -543,6 +547,7 @@ namespace ThirdPartyAutomation
                 added_utc = DateTime.UtcNow,
             };
             Seat result = await sdk.Seat.CreateSeatAsync(seat).DemoUnPack();
+
             return result;
         }
         public async Task<bool> Principal_Seat_Remove(Guid faction_id, Guid seat_id)
@@ -707,6 +712,197 @@ namespace ThirdPartyAutomation
             HavenSDK sdk = this.GetHavenSDK(faction_id);
             ActionResult result = await sdk.Managers.ChangeTypeAsync(manager_id, ManagerType.Administrator);
             return result.IsSuccess();
+        }
+
+        #endregion
+
+
+        #region Use Case Occasion
+
+        public async Task<Occasion> Occasion_Create(Guid faction_id)
+        {
+            HavenSDK sdk = this.GetHavenSDK(faction_id);
+
+            // sample retrieve category
+            List<OccasionCategory> categories = await sdk.OccasionCategory.GetOccasionCategoryByFactionAsync(faction_id, 0, 100).DemoUnPack();
+            Guid default_category_id = categories.FirstOrDefault().occasion_category_id;
+
+            OccasionCategory category = categories.FirstOrDefault(x => x.name == "Secondary");
+            if(category != null)
+            {
+                default_category_id = category.occasion_category_id;
+            }
+
+            Occasion occasion = this.CreateOccasionInstance(faction_id, default_category_id);
+
+            // upload a cover photo [any web url will work]
+            occasion.uploaded_file = await UploadOccasionImage(sdk, faction_id, "https://d9s89f6oqgyug.cloudfront.net/fcn/AAAAAAAAAAAAAAAAAAAAAA/pst/dS3FnBwjvU2CcnXZ4qB6zQ/Image/3ntkQFi5W0CK2pt3n7h_gw/276132346face_md.png");
+
+            // persist
+            occasion = await sdk.Occasions.UpsertOccasionAsync(occasion).DemoUnPack();
+            return occasion;
+        }
+
+       
+
+        public async Task<Occasion> Occasion_Edit(Guid faction_id, Guid occasion_id)
+        {
+            HavenSDK sdk = this.GetHavenSDK(faction_id);
+
+            Occasion occasion = await sdk.Occasion.GetOccasionAsync(occasion_id).DemoUnPack();
+            occasion.title = string.Format("I was updated at {0}", DateTime.UtcNow);
+
+            occasion.sections.Add(new OccasionSection()
+            {
+                kind = OccasionSectionKind.text,
+                text = "hello updated!"
+            });
+
+            occasion = await sdk.Occasions.UpsertOccasionAsync(occasion).DemoUnPack();
+            return occasion;
+        }
+
+        protected async Task<UploadedFile> UploadOccasionImage(HavenSDK sdk, Guid faction_id, string image_url)
+        {
+            byte[] original = this.GetImageDataFromUrl(image_url);
+            if (original != null)
+            {
+                // --  Retrieve an endpoint to upload to [ensure the verb and mimetype match your actual uplaoder]
+                PreSignedUrl uploadLocation = await sdk.Media.GetTemporaryUploadUrl(AssetType.Image, MediaTarget.faction, System.IO.Path.GetFileName(image_url), faction_id, faction_id, "PUT", "application/octet-stream").DemoUnPack();
+
+                // --  Upload the file
+                this.UploadToAmazon(uploadLocation, original);
+
+                // --  Return the info
+                return new UploadedFile()
+                {
+                    id = uploadLocation.id,
+                    name = System.IO.Path.GetFileName(image_url),
+                    url = uploadLocation.url
+                };
+            }
+            return null;
+        }
+
+        private Occasion CreateOccasionInstance(Guid faction_id, Guid occasion_category_id)
+        {
+            Occasion occasion = new Occasion()
+            {
+                faction_id = faction_id,
+                occasion_category_id = occasion_category_id,
+                sections = new List<OccasionSection>(),
+                status = OccasionStatus.Active,
+                external_identifier = string.Empty, // should use this for external tracking!
+                title = "Go Party!",
+                description = "this is an occasion",
+                location = "Somewhere Else",
+                start_utc_timezone = "Eastern Standard Time", // .net: TimeZoneInfo.GetSystemTimeZones().FirstOrDefault().StandardName
+            };
+
+            // UI ignores time zone, so it is reconstructed here as if we were a UI
+            string sampleStartDate = "11/13/2019";
+            string sampleStartTime = "13:00";
+            string sampleEndDate = "11/13/2019";
+            string sampleEndTime = "14:00";
+            occasion.start_utc_static = DateTime.ParseExact(string.Format("{0} {1}", sampleStartDate, sampleStartTime), "MM/dd/yyyy HH:mm", new CultureInfo("en-US")).ToString("MM/dd/yyyy hh:mm tt");
+            occasion.end_utc_timezone = "Eastern Standard Time";
+            occasion.end_utc_static = DateTime.ParseExact(string.Format("{0} {1}", sampleEndDate, sampleEndTime), "MM/dd/yyyy HH:mm", new CultureInfo("en-US")).ToString("MM/dd/yyyy hh:mm tt");
+
+            occasion.sections.Add(new OccasionSection()
+            {
+                kind = OccasionSectionKind.header,
+                text = "Director"
+            });
+            occasion.sections.Add(new OccasionSection()
+            {
+                kind = OccasionSectionKind.text,
+                text = "A cool guy"
+            });
+
+            occasion.sections.Add(new OccasionSection()
+            {
+                kind = OccasionSectionKind.header,
+                text = "Synopsis"
+            });
+            occasion.sections.Add(new OccasionSection()
+            {
+                kind = OccasionSectionKind.text,
+                text = "A great summary here"
+            });
+
+
+            return occasion;
+        }
+
+
+        protected Image GetImageFromUrl(string imageUrl)
+        {
+            Image result = null;
+            string[] webPrefixList = new string[] { "http", "ftp" };
+            foreach (string webPrefix in webPrefixList)
+            {
+                if (imageUrl.ToLower().StartsWith(webPrefix))
+                {
+                    WebClient webClient = new WebClient();
+                    using (System.IO.MemoryStream memStream = new System.IO.MemoryStream(webClient.DownloadData(imageUrl)))
+                    {
+                        result = System.Drawing.Bitmap.FromStream(memStream);
+                    }
+                    break;
+                }
+            }
+            if (result == null)
+            {
+                // even possible?
+                result = Image.FromFile(imageUrl);
+            }
+            return result;
+        }
+
+        protected byte[] GetImageDataFromUrl(string imageUrl)
+        {
+            byte[] result = null;
+            string[] webPrefixList = new string[] { "http", "ftp" };
+            foreach (string webPrefix in webPrefixList)
+            {
+                if (imageUrl.ToLower().StartsWith(webPrefix))
+                {
+                    WebClient webClient = new WebClient();
+                    result = webClient.DownloadData(imageUrl);
+                    break;
+                }
+            }
+            return result;
+        }
+
+        public void UploadToAmazon(PreSignedUrl presignedUrl, byte[] imageData)
+        {
+            using (System.IO.MemoryStream fileStream = new System.IO.MemoryStream(imageData))
+            {
+                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(presignedUrl.signed_url);
+                request.Method = "PUT";
+                request.ContentType = "application/octet-stream";
+                request.Timeout = -1; //Infinite wait for the response.
+                request.AllowWriteStreamBuffering = false;
+                request.ContentLength = fileStream.Length;
+                // Create 32KB buffer which is file page size.
+                byte[] tempBuffer = new byte[1024 * 64];
+                int bytesRead = 0;
+                int totalBytesRead = 0;
+
+                // Write the source data to the network stream.
+                Stream requestStream = request.GetRequestStream();
+                // Loop till the file content is read completely.
+                while ((bytesRead = fileStream.Read(tempBuffer, 0, tempBuffer.Length)) > 0)
+                {
+                    totalBytesRead += bytesRead;
+                    // Write the 8 KB data in the buffer to the network stream.
+                    requestStream.Write(tempBuffer, 0, bytesRead);
+                }
+                requestStream.Close();
+
+                WebResponse response = request.GetResponse();
+            }
         }
 
         #endregion

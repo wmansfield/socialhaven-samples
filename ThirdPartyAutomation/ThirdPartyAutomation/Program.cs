@@ -44,6 +44,7 @@ namespace ThirdPartyAutomation
             //UseCases_Groups().Wait();
             //UseCases_Terms().Wait();
             //UseCases_Principals().Wait();
+            //UseCases_Occasions().Wait();
 
             Console.WriteLine("Press any key to close..");
             Console.ReadKey();
@@ -189,6 +190,15 @@ namespace ThirdPartyAutomation
 
         }
 
-        
+        static async Task UseCases_Occasions()
+        {
+            AccountInfo account = await _consumer.GetSelf().DemoUnPack();
+            _consumer = new SampleConsumer(_apiUrl, account);
+
+
+            Occasion occasion = await _consumer.Occasion_Create(_sampleFactionID.GetValueOrDefault());
+            Console.WriteLine("Created Occasion: {0}", occasion.occasion_id);
+
+        }
     }
 }
